@@ -1,5 +1,7 @@
-use std::{env, path, process::exit};
-use clap::{Command, Arg};
+use std::{env, path, process};
+use clap::{Arg};
+
+// template dir ================================================================
 
 fn get_template_dir() -> Result<path::PathBuf, String> {
     let mut p = env::current_exe()
@@ -48,9 +50,63 @@ fn template_values(
     Ok(templates)
 }
 
+fn template_path(
+    template_dir: &path::PathBuf,
+    subdir: &str,
+    name: &str,
+    ext: &str,
+) -> path::PathBuf {
+    let mut path = template_dir.clone();
+    path.push(subdir);
+    path.push(name);
+    path.set_extension(ext);
+
+    path
+}
+
+// scripts =====================================================================
+
+const SCRIPT_ENV: &str = "/usr/bin/env";
+const SCRIPT_RUNNER: &str = "sh";
+
+fn script_path(template_dir: &path::PathBuf, name: &str) -> path::PathBuf {
+    template_path(template_dir, "scripts", name, "sh")
+}
+
+/// uses /usr/bin/env to run scripts
+fn run_script(
+    template_dir: &path::PathBuf,
+    project_dir: &path::PathBuf,
+    name: &str,
+) -> Result<(), String> {
+    println!("[executing script `{}`]", name);
+
+    let status = process::Command::new(SCRIPT_ENV)
+        .current_dir(project_dir)
+        .arg(SCRIPT_RUNNER)
+        .arg(script_path(template_dir, name))
+        .stdin(process::Stdio::piped())
+        .stdout(process::Stdio::piped())
+        .status();
+
+    match status {
+        Err(e) => Err(e.to_string()),
+        Ok(status) => {
+            if !status.success() {
+                Err(format!("script `{}` failed", name))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+// main functionality ==========================================================
+
 #[derive(Debug)]
 struct Config {
     flake: String,
+    scripts: Vec<String>,
     license: Option<String>,
     path: path::PathBuf,
 }
@@ -60,10 +116,11 @@ impl Config {
     fn from_args(template_dir: &path::PathBuf) -> Result<Self, String> {
         // get available flakes and licenses
         let flakes = template_values(template_dir, "flakes")?;
+        let scripts = template_values(template_dir, "scripts")?;
         let licenses = template_values(template_dir, "licenses")?;
 
         // create CLAP
-        let matches = Command::new("make-project")
+        let matches = clap::Command::new("make-project")
             .version("0.0")
             .author("garrisonhh <garrisonhh@pm.me>")
             .about("a personalized project initializer.")
@@ -72,6 +129,13 @@ impl Config {
                     .short('l')
                     .long("license")
                     .value_parser(licenses)
+            )
+            .arg(
+                Arg::new("scripts")
+                    .short('s')
+                    .long("scripts")
+                    .value_delimiter(',')
+                    .value_parser(scripts)
             )
             .arg(
                 Arg::new("flake")
@@ -90,37 +154,27 @@ impl Config {
         let flake = matches.get_one::<String>("flake")
             .unwrap()
             .to_owned(); 
+        let scripts = matches.get_many::<String>("scripts")
+            .unwrap()
+            .map(String::to_owned)
+            .collect::<Vec<_>>();
         let license = matches.get_one::<String>("license")
             .map(String::to_owned);
-        let path = matches.get_one::<String>("path")
-            .map(path::PathBuf::from)
-            .unwrap();
+        let path = env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(matches.get_one::<String>("path").unwrap());
 
         Ok(Self {
             flake,
+            scripts,
             license,
             path,
         })
     }
 
-    fn template_path(
-        template_dir: &path::PathBuf,
-        subdir: &str,
-        name: &str,
-        ext: &str,
-    ) -> path::PathBuf {
-        let mut path = template_dir.clone();
-        path.push(subdir);
+    fn sub_path(&self, name: &str) -> path::PathBuf {
+        let mut path = self.path.clone();
         path.push(name);
-        path.set_extension(ext);
-
-        path
-    }
-
-    fn dest_path(base: &path::PathBuf, name: &str, ext: &str) -> path::PathBuf {
-        let mut path = base.clone();
-        path.push(name);
-        path.set_extension(ext);
 
         path
     }
@@ -136,24 +190,30 @@ impl Config {
             Ok(()) => (),
             Err(e) => return Err(e.to_string()),
         }
-        
-        // copy flake and license
-        if let Some(name) = self.license {
+
+        // copy license
+        if let Some(name) = &self.license {
             match std::fs::copy(
-                Self::template_path(template_dir, "licenses", &name, "md"),
-                Self::dest_path(&self.path, "LICENSE", "md"),
+                template_path(template_dir, "licenses", &name, "md"),
+                self.sub_path("LICENSE.md"),
             ) {
                 Ok(_) => (),
                 Err(e) => return Err(e.to_string()),
             }
         }
 
+        // copy flake
         match std::fs::copy(
-            Self::template_path(template_dir, "flakes", &self.flake, "nix"),
-            Self::dest_path(&self.path, "flake", "nix"),
+            template_path(template_dir, "flakes", &self.flake, "nix"),
+            self.sub_path("flake.nix"),
         ) {
             Ok(_) => (),
             Err(e) => return Err(e.to_string()),
+        }
+
+        // run any scripts
+        for name in self.scripts {
+            run_script(template_dir, &self.path, &name)?;
         }
 
         Ok(())
@@ -170,7 +230,7 @@ fn main() {
         Ok(()) => (),
         Err(msg) => {
             eprintln!("error: {}", msg);
-            exit(1);
+            process::exit(1);
         },
     }
 }
