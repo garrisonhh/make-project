@@ -139,7 +139,8 @@ impl Config {
             )
             .arg(
                 Arg::new("flake")
-                    .required(true)
+                    .short('f')
+                    .long("flake")
                     .help("nix flake template")
                     .value_parser(flakes)
             )
