@@ -12,18 +12,11 @@
       system = "x86_64-linux";
 
       # project reqs
-      inherit (pkgs) mkShell;
-      inherit (pkgs.stdenv) mkDerivation;
       pkgs = nixpkgs.legacyPackages.${system};
       zigpkgs = zig.packages.${system};
 
+      inherit (pkgs.stdenv) mkDerivation;
       inputs = [ zigpkgs.master ];
-      extraShellInputs = with pkgs; [ gdb wabt ];
-
-      # developer shell
-      shell = mkShell {
-        packages = inputs ++ extraShellInputs;
-      };
 
       # create a derivation for the build with some args for `zig build`
       makePackage = buildArgs:
@@ -44,16 +37,20 @@
 
             installPhase = ''
               mkdir -p $out/
-              cp zig-out/lib/* $out/
+              cp zig-out/*/* $out/
             '';
+            
+            outputs = [ "out" ];
           };
 
       packages = {
         default = makePackage [];
+        debug = makePackage ["-Doptimize=Debug"];
+        release = makePackage ["-Doptimize=ReleaseFast"];
       };
     in
       {
-        devShells.${system}.default = shell;
+        devShells.${system}.default = packages.debug;
         packages.${system} = packages;
       };
 }
