@@ -105,7 +105,7 @@ fn run_script(
 
 #[derive(Debug)]
 struct Config {
-    flake: String,
+    flake: Option<String>,
     scripts: Vec<String>,
     license: Option<String>,
     path: path::PathBuf,
@@ -153,8 +153,7 @@ impl Config {
 
         // args -> Config
         let flake = matches.get_one::<String>("flake")
-            .unwrap()
-            .to_owned(); 
+            .map(String::to_owned); 
         let scripts = matches.get_many::<String>("scripts")
             .unwrap()
             .map(String::to_owned)
@@ -204,12 +203,14 @@ impl Config {
         }
 
         // copy flake
-        match std::fs::copy(
-            template_path(template_dir, "flakes", &self.flake, "nix"),
-            self.sub_path("flake.nix"),
-        ) {
-            Ok(_) => (),
-            Err(e) => return Err(e.to_string()),
+        if let Some(flake) = &self.flake {
+            match std::fs::copy(
+                template_path(template_dir, "flakes", &flake, "nix"),
+                self.sub_path("flake.nix"),
+            ) {
+                Ok(_) => (),
+                Err(e) => return Err(e.to_string()),
+            }
         }
 
         // run any scripts
